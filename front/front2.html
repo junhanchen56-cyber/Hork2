@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企業請假系統 - 前端</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        /* Custom Tailwind Configuration and Base Styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9; /* Slate 100 */
+        }
+        .main-container {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+        }
+        /* Style for pre-formatted JSON display */
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#1e40af', /* Blue 700 */
+                        'secondary': '#f97316', /* Orange 600 */
+                        'success': '#10b981', /* Emerald 500 */
+                        'danger': '#ef4444', /* Red 500 */
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="app" class="main-container w-full">
+        <!-- Content will be rendered here -->
+    </div>
+
+    <!-- Modal for Messages -->
+    <div id="message-modal" class="hidden fixed inset-0 z-50 overflow-y-auto bg-gray-900 bg-opacity-50 flex items-center justify-center transition-opacity duration-300">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-sm transform transition-transform duration-300 scale-95">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-primary">訊息</h3>
+            <p id="modal-body" class="text-gray-700 mb-4"></p>
+            <button onclick="closeModal()" class="w-full bg-primary hover:bg-blue-800 text-white font-semibold py-2 rounded-lg transition duration-150">確定</button>
+        </div>
+    </div>
+
+    <script>
+        // *** 1. CONFIGURATION ***
+        // 🚨 這是後端 Vercel 部署後的網址！請務必替換成您的實際網址！
+        const BACKEND_URL = 'https://your-vercel-backend-url.vercel.app'; 
+
+        // *** 2. STATE MANAGEMENT ***
+        let currentUser = null; // { account, name, role, token }
+        let leavesData = [];
+        let currentView = 'login';
+        const app = document.getElementById('app');
+
+        // *** 3. UTILITY FUNCTIONS ***
+
+        /** 顯示訊息彈窗 (取代 alert) */
+        function showModal(title, body) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-body').textContent = body;
+            document.getElementById('message-modal').classList.remove('hidden');
+            document.querySelector('#message-modal > div').classList.add('scale-100');
+        }
+
+        /** 關閉彈窗 */
+        function closeModal() {
+            document.querySelector('#message-modal > div').classList.remove('scale-100');
+            document.getElementById('message-modal').classList.add('hidden');
+        }
+
+        /** 執行 API 請求 */
+        async function apiFetch(endpoint, method = 'GET', data = null) {
+            const url = `${BACKEND_URL}${endpoint}`;
+            const options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    // 'Authorization': currentUser ? `Bearer ${currentUser.token}` : '' // 實際專案需加上
+                },
+            };
+
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    // 嘗試解析錯誤訊息
+                    const errorData = await response.json().catch(() => ({ message: '伺服器錯誤' }));
+                    throw new Error(errorData.message || 'API 請求失敗');
+                }
+                // 檢查是否為 204 No Content
+                if (response.status === 204 || response.headers.get("Content-Length") === "0") {
+                    return { status: "success", message: "操作成功" };
+                }
+                return response.json();
+            } catch (error) {
+                console.error('API Error:', error);
+                showModal('連線或請求錯誤', error.message || '無法連線到後端服務，請檢查網址是否正確。');
+                return null;
+            }
+        }
+
+        /** 取得假單資料 */
+        async function fetchLeaves() {
+            let endpoint = '/api/leaves';
+            if (currentUser.role === 'student') {
+                endpoint += `?student_id=${currentUser.account}`;
+            }
+            
+            const data = await apiFetch(endpoint);
+            if (data) {
+                leavesData = data;
+                render();
+            }
+        }
+
+        // *** 4. RENDER FUNCTIONS ***
+
+        /** 主渲染器 */
+        function render() {
+            if (!currentUser && currentView !== 'login') {
+                currentView = 'login';
+            }
+            
+            app.innerHTML = '';
+            let htmlContent = '';
+
+            switch (currentView) {
+                case 'login':
+                    htmlContent = renderLogin();
+                    break;
+                case 'student':
+                    htmlContent = renderStudentDashboard();
+                    break;
+                case 'admin':
+                    htmlContent = renderAdminDashboard();
+                    break;
+                default:
+                    htmlContent = renderLogin();
+            }
+
+            // 主要卡片容器
+            app.innerHTML = `
+                <div class="w-full max-w-4xl pt-8">
+                    <header class="mb-8 p-4 bg-white shadow-lg rounded-xl flex justify-between items-center flex-wrap">
+                        <h1 class="text-2xl font-extrabold text-primary flex items-center">
+                            <i class="fa-solid fa-list-check mr-3 text-secondary"></i>
+                            企業請假系統
+                        </h1>
+                        ${currentUser ? `
+                            <div class="mt-2 sm:mt-0 text-sm font-medium text-gray-700">
+                                歡迎, <span class="text-primary">${currentUser.name} (${currentUser.role === 'admin' ? '主管' : '學生'})</span>
+                                <button onclick="logout()" class="ml-4 text-danger hover:text-red-700 transition duration-150">
+                                    <i class="fa-solid fa-right-from-bracket"></i> 登出
+                                </button>
+                            </div>
+                        ` : ''}
+                    </header>
+                    <main id="dashboard-content">
+                        ${htmlContent}
+                    </main>
+                </div>
+            `;
+            // 如果在 Dashboard，確保數據是最新的
+            if (currentUser && currentView !== 'login') {
+                fetchLeaves();
+            }
+        }
+
+        /** 登入介面 */
+        function renderLogin() {
+            return `
+                <div class="bg-white p-8 md:p-12 rounded-xl shadow-2xl w-full max-w-md mx-auto mt-10 border-t-4 border-primary">
+                    <h2 class="text-3xl font-bold mb-6 text-center text-gray-800">系統登入</h2>
+                    <form id="login-form" onsubmit="handleLogin(event)">
+                        <div class="mb-6">
+                            <label for="account" class="block text-sm font-medium text-gray-700 mb-1">帳號 (學號/Admin)</label>
+                            <input type="text" id="account" name="account" placeholder="e.g. 12156208 或 admin" required 
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary transition duration-150">
+                        </div>
+                        <div class="mb-8">
+                            <label for="password" class="block text-sm font-medium text-gray-700 mb-1">密碼</label>
+                            <input type="password" id="password" name="password" placeholder="e.g. 123 或 admin" required 
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary transition duration-150">
+                        </div>
+                        <button type="submit" class="w-full bg-primary hover:bg-blue-800 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
+                            <i class="fa-solid fa-arrow-right-to-bracket mr-2"></i> 登入系統
+                        </button>
+                    </form>
+                    <div class="mt-6 text-sm text-gray-500 text-center">
+                        <p>測試帳號: 學生(12156208/123), 主管(admin/admin)</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        /** 學生儀表板 */
+        function renderStudentDashboard() {
+            const studentLeaves = leavesData.filter(l => l.student_id === currentUser.account);
+            
+            return `
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- 左側: 申請請假表單 -->
+                    <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg border-l-4 border-secondary h-min">
+                        <h3 class="text-xl font-bold text-secondary mb-4 flex items-center">
+                            <i class="fa-solid fa-file-signature mr-2"></i> 申請請假
+                        </h3>
+                        <form id="apply-form" onsubmit="handleApply(event)">
+                            <input type="hidden" id="student_id" value="${currentUser.account}">
+                            <div class="mb-4">
+                                <label for="date" class="block text-sm font-medium text-gray-700 mb-1">請假日期</label>
+                                <input type="date" id="date" required 
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary transition">
+                            </div>
+                            <div class="mb-6">
+                                <label for="reason" class="block text-sm font-medium text-gray-700 mb-1">請假事由</label>
+                                <textarea id="reason" rows="3" placeholder="請詳細說明請假原因..." required 
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary transition"></textarea>
+                            </div>
+                            <button type="submit" class="w-full bg-secondary hover:bg-orange-700 text-white font-bold py-2 rounded-lg transition duration-200">
+                                <i class="fa-solid fa-paper-plane mr-2"></i> 提交申請
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- 右側: 假單狀態列表 -->
+                    <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg border-l-4 border-primary">
+                        <h3 class="text-xl font-bold text-primary mb-4 flex items-center">
+                            <i class="fa-solid fa-calendar-check mr-2"></i> 我的請假記錄 (${studentLeaves.length} 筆)
+                        </h3>
+                        ${renderLeavesTable(studentLeaves, 'student')}
+                    </div>
+                </div>
+            `;
+        }
+
+        /** 主管儀表板 */
+        function renderAdminDashboard() {
+            const pendingCount = leavesData.filter(l => l.status === 'Pending').length;
+            
+            return `
+                <div class="bg-white p-6 rounded-xl shadow-2xl border-t-4 border-success">
+                    <h3 class="text-2xl font-bold text-success mb-4 flex items-center">
+                        <i class="fa-solid fa-user-tie mr-2"></i> 主管審核中心
+                        <span class="ml-4 px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-base font-semibold">待審核: ${pendingCount} 筆</span>
+                    </h3>
+                    <p class="text-gray-600 mb-6">以下是所有員工/學生的請假申請列表，請進行審核。</p>
+                    ${renderLeavesTable(leavesData, 'admin')}
+                </div>
+            `;
+        }
+        
+        /** 渲染假單表格 (共用) */
+        function renderLeavesTable(data, role) {
+            if (data.length === 0) {
+                return `<p class="text-gray-500 text-center py-10">目前沒有任何假單記錄。</p>`;
+            }
+
+            // 排序：待審核的優先顯示
+            const sortedData = [...data].sort((a, b) => {
+                if (a.status === 'Pending' && b.status !== 'Pending') return -1;
+                if (a.status !== 'Pending' && b.status === 'Pending') return 1;
+                return new Date(b.date) - new Date(a.date);
+            });
+
+            return `
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                ${role === 'admin' ? '<th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">申請人ID</th>' : ''}
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">日期</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">事由</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
+                                ${role === 'admin' ? '<th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>' : ''}
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${sortedData.map(leave => {
+                                const statusColor = {
+                                    'Pending': 'bg-yellow-100 text-yellow-800',
+                                    'Approved': 'bg-success text-white',
+                                    'Rejected': 'bg-danger text-white'
+                                }[leave.status] || 'bg-gray-100 text-gray-800';
+
+                                return `
+                                    <tr>
+                                        <td class="px-3 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${leave.id}</td>
+                                        ${role === 'admin' ? `<td class="px-3 py-4 whitespace-nowrap text-sm text-gray-500">${leave.student_id}</td>` : ''}
+                                        <td class="px-3 py-4 whitespace-nowrap text-sm text-gray-900">${leave.date}</td>
+                                        <td class="px-3 py-4 text-sm text-gray-500 max-w-xs truncate">${leave.reason}</td>
+                                        <td class="px-3 py-4 whitespace-nowrap">
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}">
+                                                ${leave.status === 'Pending' ? '待審核' : (leave.status === 'Approved' ? '已批准' : '已拒絕')}
+                                            </span>
+                                        </td>
+                                        ${role === 'admin' ? `
+                                            <td class="px-3 py-4 whitespace-nowrap text-center text-sm font-medium">
+                                                ${leave.status === 'Pending' ? `
+                                                    <button onclick="handleAudit(${leave.id}, 'Approved')" class="text-success hover:text-green-700 mr-3 transition">批准</button>
+                                                    <button onclick="handleAudit(${leave.id}, 'Rejected')" class="text-danger hover:text-red-700 transition">拒絕</button>
+                                                ` : '已處理'}
+                                            </td>
+                                        ` : ''}
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // *** 5. EVENT HANDLERS ***
+
+        /** 處理登入請求 */
+        async function handleLogin(event) {
+            event.preventDefault();
+            const form = event.target;
+            const account = form.account.value;
+            const password = form.password.value;
+            
+            const result = await apiFetch('/api/login', 'POST', { account, password });
+
+            if (result && result.status === 'success') {
+                currentUser = {
+                    account: account,
+                    name: result.name,
+                    role: result.role,
+                    token: result.token
+                };
+                currentView = result.role;
+                showModal('登入成功', `歡迎 ${result.name} (${result.role === 'admin' ? '主管' : '學生'})！`);
+                render();
+            }
+        }
+
+        /** 處理請假申請 */
+        async function handleApply(event) {
+            event.preventDefault();
+            const form = event.target;
+            const student_id = form.student_id.value;
+            const date = form.date.value;
+            const reason = form.reason.value;
+
+            const result = await apiFetch('/api/apply', 'POST', { student_id, date, reason });
+
+            if (result && result.status === 'success') {
+                showModal('申請成功', '您的請假申請已提交，請等待主管審核。');
+                // 清空表單
+                form.date.value = '';
+                form.reason.value = '';
+                // 重新載入資料
+                fetchLeaves();
+            }
+        }
+
+        /** 處理假單審核 */
+        async function handleAudit(id, status) {
+            if (!confirm(`確定要將假單 ID: ${id} 設為 ${status === 'Approved' ? '批准' : '拒絕'} 嗎?`)) {
+                return; // 取消操作
+            }
+
+            const result = await apiFetch('/api/audit', 'PATCH', { id, status });
+
+            if (result && result.status === 'success') {
+                showModal('審核成功', result.message);
+                // 重新載入資料
+                fetchLeaves();
+            }
+        }
+
+        /** 登出 */
+        function logout() {
+            currentUser = null;
+            leavesData = [];
+            currentView = 'login';
+            showModal('登出成功', '您已安全登出系統。');
+            render();
+        }
+
+        // *** 6. INITIALIZATION ***
+        window.onload = render; // 頁面載入後，開始渲染登入畫面
+
+        // 為了讓使用者體驗更好，避免使用 alert()，用自訂 modal 取代
+        function confirm(message) {
+            return window.confirm(message); // 這裡使用原生 confirm，因為這在 Canvas 環境下是例外允許的
+        }
+    </script>
+</body>
+</html>
