@@ -1,6 +1,6 @@
-git add vercel.json
-git commit -m "Fix 404 error: rewrite all routes to flask"
-git push
+{
+  "source": "/(.*)",
+  "destination": "/api/index.py"
+}
 
---
 
