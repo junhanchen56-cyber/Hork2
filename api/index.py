@@ -2,27 +2,23 @@ from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 import json
 
-# 初始化 Flask App
 app = Flask(__name__)
-CORS(app) 
+CORS(app)
 
-# --- 模擬資料庫 (Mock Database) ---
-# 實際專案中，這裡應該連接資料庫 (如 Firestore 或 PostgreSQL)
+# --- Mock Data ---
 users = {
     "12156208": {"pwd": "123", "name": "王小明", "role": "student"},
     "admin": {"pwd": "admin", "name": "系統管理員", "role": "admin"}
 }
 
+# 預設假單資料
 leaves = [
     {"id": 1, "student_id": "12156208", "date": "2023-12-01", "reason": "病假", "status": "Pending"},
     {"id": 2, "student_id": "12156231", "date": "2023-12-05", "reason": "事假", "status": "Approved"}
 ]
 next_leave_id = 3
 
-# --- HTML/JavaScript 前端程式碼 (作為 Python 字串) ---
-# 注意：前端 JS 中的 API_BASE_PATH 設置為 /api，指向下面的 Flask 路由
-# --- 已修正 JS 語法錯誤的 HTML ---
-# --- HTML (修正版: 點擊輸入框直接彈出日曆 + 修復無法選取問題) ---
+# --- HTML (最終修復版：防止頁面刷新 + 穩定日曆) ---
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -33,8 +29,8 @@ FRONTEND_HTML = r"""
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <style>
-        /* 強制讓日曆圖示更明顯，且讓整個輸入框都可以點擊 */
-        input[type="date"] {
+        /* 讓整個 Date 輸入框點擊時都能觸發日曆 */
+        .date-wrapper {
             position: relative;
         }
         input[type="date"]::-webkit-calendar-picker-indicator {
@@ -45,8 +41,7 @@ FRONTEND_HTML = r"""
             bottom: 0;
             width: 100%;
             height: 100%;
-            color: transparent;
-            background: transparent;
+            opacity: 0;
             cursor: pointer;
         }
     </style>
@@ -58,7 +53,6 @@ FRONTEND_HTML = r"""
         const API_BASE = '/api';
         let user = null;
         let leaves = [];
-        let view = 'login';
         const app = document.getElementById('app');
 
         async function api(url, method='GET', body=null) {
@@ -100,18 +94,18 @@ FRONTEND_HTML = r"""
                     <h2 class="text-2xl font-bold mb-6 text-center">系統登入</h2>
                     <form onsubmit="handleLogin(event)">
                         <label class="block mb-1 text-sm text-gray-600">帳號</label>
-                        <input type="text" name="acc" placeholder="12156208 / admin" class="w-full p-2 border mb-4 rounded focus:ring-2 ring-blue-500 outline-none" required>
+                        <input type="text" id="login-acc" placeholder="12156208 / admin" class="w-full p-2 border mb-4 rounded focus:ring-2 ring-blue-500 outline-none" required>
                         <label class="block mb-1 text-sm text-gray-600">密碼</label>
-                        <input type="password" name="pwd" placeholder="123 / admin" class="w-full p-2 border mb-6 rounded focus:ring-2 ring-blue-500 outline-none" required>
-                        <button class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 transition font-bold">登入</button>
+                        <input type="password" id="login-pwd" placeholder="123 / admin" class="w-full p-2 border mb-6 rounded focus:ring-2 ring-blue-500 outline-none" required>
+                        <button type="submit" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 transition font-bold">登入</button>
                     </form>
                 </div>`;
         }
 
         async function handleLogin(e) {
-            e.preventDefault();
-            const acc = e.target.acc.value;
-            const pwd = e.target.pwd.value;
+            e.preventDefault(); // 防止登入表單刷新
+            const acc = document.getElementById('login-acc').value;
+            const pwd = document.getElementById('login-pwd').value;
             const res = await api('/login', 'POST', { account: acc, password: pwd });
             if (res && res.status === 'success') {
                 user = { account: acc, name: res.name, role: res.role };
@@ -130,15 +124,19 @@ FRONTEND_HTML = r"""
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div class="bg-white p-6 rounded shadow h-fit border-l-4 border-orange-500">
                         <h3 class="text-lg font-bold mb-4 text-orange-600">申請假單</h3>
-                        <form onsubmit="apply(event)">
+                        
+                        <div>
                             <label class="block mb-2 font-medium">日期</label>
-                            <input type="date" name="date" required onclick="this.showPicker()" class="w-full p-2 border rounded mb-4 cursor-pointer hover:bg-gray-50">
+                            <div class="date-wrapper relative">
+                                <input type="date" id="apply-date" class="w-full p-2 border rounded mb-4 cursor-pointer hover:bg-gray-50 bg-white">
+                            </div>
                             
                             <label class="block mb-2 font-medium">事由</label>
-                            <textarea name="reason" required rows="3" class="w-full p-2 border rounded mb-4" placeholder="請填寫原因..."></textarea>
+                            <textarea id="apply-reason" rows="3" class="w-full p-2 border rounded mb-4" placeholder="請填寫原因..."></textarea>
                             
-                            <button class="w-full bg-orange-500 text-white p-2 rounded hover:bg-orange-600 font-bold">送出申請</button>
-                        </form>
+                            <button type="button" onclick="handleApply()" class="w-full bg-orange-500 text-white p-2 rounded hover:bg-orange-600 font-bold">送出申請</button>
+                        </div>
+
                     </div>
                     <div class="md:col-span-2 bg-white p-6 rounded shadow border-l-4 border-blue-500">
                         <h3 class="text-lg font-bold mb-4 text-blue-600">我的紀錄</h3>
@@ -186,18 +184,26 @@ FRONTEND_HTML = r"""
                 </div>`;
         }
 
-        async function apply(e) {
-            e.preventDefault();
-            // 修正：使用 e.target.elements.date.value 確保抓取正確
-            const dateVal = e.target.elements.date.value;
-            const reasonVal = e.target.elements.reason.value;
+        async function handleApply() {
+            // 直接抓取 ID，不依賴 form submit
+            const dateVal = document.getElementById('apply-date').value;
+            const reasonVal = document.getElementById('apply-reason').value;
             
+            if (!dateVal || !reasonVal) {
+                alert('請填寫完整資料！');
+                return;
+            }
+
             const res = await api('/apply', 'POST', { 
                 student_id: user.account, 
                 date: dateVal, 
                 reason: reasonVal 
             });
-            if (res) { await loadLeaves(); render(); }
+            if (res) { 
+                await loadLeaves(); 
+                render(); 
+                alert('申請成功！'); // 加入提示讓你知道成功了
+            }
         }
 
         async function audit(id, status) {
@@ -212,80 +218,40 @@ FRONTEND_HTML = r"""
 </body>
 </html>
 """
-# --- 核心 API 路由 ---
 
-# 1. 前端渲染路由 (處理根路徑 /)
 @app.route('/')
 def home():
-    # 返回包含整個前端 UI 的 HTML 字串
-    # Vercel 接收到 / 請求時，會執行此函式並返回 HTML
     return Response(FRONTEND_HTML, mimetype='text/html')
 
-# 2. 登入 API (/api/login)
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
-    account = data.get('account')
-    password = data.get('password')
+    u = users.get(data.get('account'))
+    if u and u['pwd'] == data.get('password'):
+        return jsonify({"status": "success", "role": u['role'], "name": u['name']})
+    return jsonify({"status": "error"}), 401
 
-    user = users.get(account)
-    
-    if user and user['pwd'] == password:
-        return jsonify({
-            "status": "success", 
-            "message": "登入成功",
-            "role": user['role'],
-            "name": user['name'],
-            "token": f"mock-token-{account}"
-        }), 200
-    else:
-        return jsonify({"status": "error", "message": "帳號或密碼錯誤"}), 401
-
-# 3. 取得假單列表 API (/api/leaves)
 @app.route('/api/leaves', methods=['GET'])
 def get_leaves():
-    student_id = request.args.get('student_id')
-    
-    # 這裡需要對 leaves 進行深拷貝以避免並發問題（在 Vercel Serverless 環境下不一定必要，但好習慣）
-    current_leaves = json.loads(json.dumps(leaves))
+    sid = request.args.get('student_id')
+    return jsonify([l for l in leaves if l['student_id'] == sid] if sid else leaves)
 
-    if student_id:
-        student_leaves = [l for l in current_leaves if l['student_id'] == student_id]
-        return jsonify(student_leaves), 200
-    else:
-        return jsonify(current_leaves), 200
-
-# 4. 申請請假 API (/api/apply)
 @app.route('/api/apply', methods=['POST'])
-def apply_leave():
-    global next_leave_id, leaves
-    data = request.json
-    
-    if not all(k in data for k in ['student_id', 'date', 'reason']):
-        return jsonify({"status": "error", "message": "缺少必要的欄位"}), 400
-        
-    new_leave = {
-        "id": next_leave_id,
-        "student_id": data['student_id'],
-        "date": data['date'],
-        "reason": data['reason'],
-        "status": "Pending" 
-    }
-    leaves.append(new_leave)
+def apply():
+    global next_leave_id
+    d = request.json
+    leaves.append({"id": next_leave_id, "student_id": d['student_id'], "date": d['date'], "reason": d['reason'], "status": "Pending"})
     next_leave_id += 1
-    return jsonify({"status": "success", "message": "假單已送出", "data": new_leave}), 201
+    return jsonify({"status": "success"}), 201
 
-# 5. 主管審核 API (/api/audit)
 @app.route('/api/audit', methods=['PATCH'])
-def audit_leave():
-    data = request.json
-    leave_id = data.get('id')
-    new_status = data.get('status') 
+def audit():
+    d = request.json
+    for l in leaves:
+        if l['id'] == d['id']:
+            l['status'] = d['status']
+            return jsonify({"status": "success"})
+    return jsonify({"error": "not found"}), 404
 
-    for leave in leaves:
-        if leave['id'] == leave_id:
-            leave['status'] = new_status
-            return jsonify({"status": "success", "message": f"假單 ID:{leave_id} 已更新為 {new_status}"}), 200
-            
-
-    return jsonify({"status": "error", "message": "找不到該假單"}), 404
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
